@@ -476,7 +476,7 @@ Resources:
               - Key: Name
                 Value: !Sub ${EnvironmentName}FI
 
-BackendLaunchTemplate:
+  BackendLaunchTemplate:
   Type: AWS::EC2::LaunchTemplate
   DeletionPolicy: Delete
   Properties:
@@ -519,7 +519,6 @@ BackendLaunchTemplate:
           Tags:
             - Key: Name
               Value: !Sub ${EnvironmentName}BI
-
 
   #-------------------------------------------Auto Scaling Groups-------------------------------------------
 
