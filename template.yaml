@@ -396,17 +396,19 @@ Resources:
             cd /home/ec2-user/frontend/
             git checkout develop
 
-            cd /home/ec2-user/frontend/src/config/Url&Port.js
-            sudo rm Url&Port.js
+            cd /home/ec2-user/frontend/src/config/UrlPort.js
+            sudo rm UrlPort.js
             cat <<EOF > /home/ec2-user/frontend/src/config/Url&Port.js
             export const backendUrl = 'http://${FrontendALB.DNSName}';
             export const backendPort = '80';
             EOF
 
             cd /home/ec2-user/frontend
-            npm install
-            npm run build
+            npm install || { echo "Error en npm install"; exit 1; }
+            npm run build || { echo "Error en npm run build"; exit 1; }
+            sudo rm -rf /usr/share/nginx/html/*  # Limpia el directorio de Nginx
             sudo cp -r build/* /usr/share/nginx/html/
+            sudo chown -R nginx:nginx /usr/share/nginx/html  # Ajusta permisos
 
             sudo tee /etc/nginx/nginx.conf > /dev/null <<EOL
             user nginx;
@@ -426,10 +428,11 @@ Resources:
 
                 server {
                     listen 80;
+                    root /usr/share/nginx/html;
+                    index index.html;
 
                     location / {
-                        root /usr/share/nginx/html;
-                        index index.html index.htm;
+                        try_files \$uri \$uri/ /index.html;
                     }
 
                     location /health/ {
@@ -463,6 +466,12 @@ Resources:
                         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
                         proxy_set_header X-Forwarded-Proto \$scheme;
                     }
+
+                    location /api/ {
+                        proxy_pass http://${BackendALB.DNSName}:${BackendPort};
+                        proxy_set_header Host \$host;
+                        proxy_set_header X-Real-IP \$remote_addr;
+                    }
                 }
             }
             EOL
@@ -477,48 +486,64 @@ Resources:
                 Value: !Sub ${EnvironmentName}FI
 
   BackendLaunchTemplate:
-  Type: AWS::EC2::LaunchTemplate
-  DeletionPolicy: Delete
-  Properties:
-    LaunchTemplateName: !Sub ${EnvironmentName}BLT
-    LaunchTemplateData:
-      ImageId: !FindInMap
-        - RegionMap
-        - !Ref AWS::Region
-        - AMI
-      InstanceType: !Ref InstanceType
-      KeyName: !Ref KeyName
-      SecurityGroupIds:
-        - !GetAtt BackendSecurityGroup.GroupId
-      UserData: !Base64
-        Fn::Sub: |
-          #!/bin/bash
-          yum update -y
-          yum install -y git java-17-amazon-corretto maven
+    Type: AWS::EC2::LaunchTemplate
+    DeletionPolicy: Delete
+    Properties:
+      LaunchTemplateName: !Sub ${EnvironmentName}BLT
+      LaunchTemplateData:
+        ImageId: !FindInMap
+          - RegionMap
+          - !Ref AWS::Region
+          - AMI
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref KeyName
+        SecurityGroupIds:
+          - !GetAtt BackendSecurityGroup.GroupId
+        UserData: !Base64
+          Fn::Sub: |
+            #!/bin/bash
+            yum update -y
+            amazon-linux-extras enable corretto11
+            yum install -y java-11-amazon-corretto-devel maven git
 
-          # Crear carpeta de trabajo
-          mkdir -p /home/ec2-user/easypark-backend
-          cd /home/ec2-user/easypark-backend
+            # Clonar repo
+            sudo -u ec2-user git clone https://github.com/Easy-Park-Icesi/backend.git /home/ec2-user/backend
+            cd /home/ec2-user/backend
 
-          # Clonar repositorio desde GitHub
-          git clone https://github.com/Easy-Park-Icesi/backend.git .
-          
-          # Compilar proyecto con Maven
-          mvn clean package -DskipTests
+            # Configurar application.properties con la URL del frontend (ALB)
+            cat <<EOF > src/main/resources/application.properties
+            frontend.url=http://${FrontendALB.DNSName}
+            # Otras configuraciones (Firebase, DB, etc.)
+            EOF
 
-          # Crear archivo de configuración si se requiere (opcional)
-          cat <<EOF > /home/ec2-user/easypark-backend/src/main/resources/application.properties
-          server.port=${BackendPort}
-          # Agrega aquí más variables si son necesarias
-          EOF
+            # Build y ejecutar
+            sudo -u ec2-user mvn clean package -DskipTests
+    
+            # Configurar como servicio systemd
+            cat <<EOF > /etc/systemd/system/easypark.service
+            [Unit]
+            Description=EasyPark Backend Service
+            After=network.target
 
-          # Ejecutar JAR en segundo plano
-          nohup java -jar target/*.jar > /home/ec2-user/backend.log 2>&1 &
-      TagSpecifications:
-        - ResourceType: instance
-          Tags:
-            - Key: Name
-              Value: !Sub ${EnvironmentName}BI
+            [Service]
+            User=ec2-user
+            WorkingDirectory=/home/ec2-user/backend
+            ExecStart=/usr/bin/java -jar target/*.jar
+            Restart=always
+            RestartSec=10
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+
+            systemctl daemon-reload
+            systemctl enable easypark.service
+            systemctl start easypark.service
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub ${EnvironmentName}BI
 
   #-------------------------------------------Auto Scaling Groups-------------------------------------------
 
