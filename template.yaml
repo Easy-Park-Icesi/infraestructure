@@ -385,24 +385,28 @@ Resources:
             #!/bin/bash
             sudo yum update -y
             sudo amazon-linux-extras install epel -y
-            sudo yum install -y stress
             sudo yum install -y nginx
             sudo yum install -y git
 
+            curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
+            sudo yum install -y nodejs
+
             cd /home/ec2-user/
             git clone https://github.com/Easy-Park-Icesi/frontend.git
-            cd /home/ec2-user/ProyectoFinal-Infra3/
-            git checkout front
+            cd /home/ec2-user/frontend/
+            git checkout develop
 
-            cd /home/ec2-user/ProyectoFinal-Infra3/Frontend/script
-            sudo rm API.js
-            cat <<EOF > /home/ec2-user/ProyectoFinal-Infra3/Frontend/script/API.js
+            cd /home/ec2-user/frontend/src/config/Url&Port.js
+            sudo rm Url&Port.js
+            cat <<EOF > /home/ec2-user/frontend/src/config/Url&Port.js
             export const backendUrl = 'http://${FrontendALB.DNSName}';
             export const backendPort = '80';
             EOF
 
-            cd /home/ec2-user/ProyectoFinal-Infra3/Frontend/
-            sudo cp -r . /usr/share/nginx/html/
+            cd /home/ec2-user/frontend
+            npm install
+            npm run build
+            sudo cp -r build/* /usr/share/nginx/html/
 
             sudo tee /etc/nginx/nginx.conf > /dev/null <<EOL
             user nginx;
