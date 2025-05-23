@@ -476,56 +476,50 @@ Resources:
               - Key: Name
                 Value: !Sub ${EnvironmentName}FI
 
-  BackendLaunchTemplate:
-    Type: AWS::EC2::LaunchTemplate
-    DeletionPolicy: Delete
-    Properties:
-      LaunchTemplateName: !Sub ${EnvironmentName}BLT
-      LaunchTemplateData:
-        ImageId: !FindInMap
-          - RegionMap
-          - !Ref AWS::Region
-          - AMI
-        InstanceType: !Ref InstanceType
-        KeyName: !Ref KeyName
-        SecurityGroupIds:
-          - !GetAtt BackendSecurityGroup.GroupId
-        UserData: !Base64
-          Fn::Sub: |
-            #!/bin/bash
-            yum update -y
-            yum install -y git
-            sudo -u ec2-user bash -c "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash"
-            export NVM_DIR="/home/ec2-user/.nvm"
-            sudo -u ec2-user bash -c 'export NVM_DIR="/home/ec2-user/.nvm" && \
-              [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" && \
-              nvm install v16.20.2 && nvm alias default v16.20.2'
-            echo 'export NVM_DIR="$HOME/.nvm"' >> /home/ec2-user/.bashrc
-            echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' >> /home/ec2-user/.bashrc
-            echo 'export PATH="$NVM_DIR/versions/node/v16.20.2/bin:$PATH"' >> /home/ec2-user/.bashrc
-            sudo -u ec2-user bash -c 'export NVM_DIR="/home/ec2-user/.nvm" && \
-              [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" && \
-              npm install -g yarn pm2'
-            sudo -u ec2-user git clone https://github.com/luisapino/ProyectoFinal-Infra3.git /home/ec2-user/ProyectoFinal-Infra3
-            cd /home/ec2-user/ProyectoFinal-Infra3
-            sudo -u ec2-user git checkout back
-            cd /home/ec2-user/ProyectoFinal-Infra3/backend
-            sudo -u ec2-user bash -c 'export NVM_DIR="/home/ec2-user/.nvm" && \
-              [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" && \
-              yarn install && yarn build'
-            cat <<EOF > /home/ec2-user/ProyectoFinal-Infra3/backend/.env
-            PORT=${BackendPort}
-            EOF
-            sudo -u ec2-user bash -c 'export NVM_DIR="/home/ec2-user/.nvm" && \
-              [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" && \
-              pm2 start yarn -- start && \
-              pm2 save && \
-              pm2 startup'
-        TagSpecifications:
-          - ResourceType: instance
-            Tags:
-              - Key: Name
-                Value: !Sub ${EnvironmentName}BI
+BackendLaunchTemplate:
+  Type: AWS::EC2::LaunchTemplate
+  DeletionPolicy: Delete
+  Properties:
+    LaunchTemplateName: !Sub ${EnvironmentName}BLT
+    LaunchTemplateData:
+      ImageId: !FindInMap
+        - RegionMap
+        - !Ref AWS::Region
+        - AMI
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SecurityGroupIds:
+        - !GetAtt BackendSecurityGroup.GroupId
+      UserData: !Base64
+        Fn::Sub: |
+          #!/bin/bash
+          yum update -y
+          yum install -y git java-17-amazon-corretto maven
+
+          # Crear carpeta de trabajo
+          mkdir -p /home/ec2-user/easypark-backend
+          cd /home/ec2-user/easypark-backend
+
+          # Clonar repositorio desde GitHub
+          git clone https://github.com/Easy-Park-Icesi/backend.git .
+          
+          # Compilar proyecto con Maven
+          mvn clean package -DskipTests
+
+          # Crear archivo de configuración si se requiere (opcional)
+          cat <<EOF > /home/ec2-user/easypark-backend/src/main/resources/application.properties
+          server.port=${BackendPort}
+          # Agrega aquí más variables si son necesarias
+          EOF
+
+          # Ejecutar JAR en segundo plano
+          nohup java -jar target/*.jar > /home/ec2-user/backend.log 2>&1 &
+      TagSpecifications:
+        - ResourceType: instance
+          Tags:
+            - Key: Name
+              Value: !Sub ${EnvironmentName}BI
+
 
   #-------------------------------------------Auto Scaling Groups-------------------------------------------
 
