@@ -42,10 +42,6 @@ Parameters:
     Type: Number
     Default: 8080
     Description: Puerto para el backend de la aplicación.
-  #JwtSecret:
-    #Type: String
-    #Default: f1878ae99c35e588ab657ce6c0692405f6c6e589550f3d1ceeb974f6c316612a
-   # Description: Secreto para JWT.
 
   # Parámetros para la configuración del frontend dentro de la instancia EC2
   FrontendPort:
@@ -63,8 +59,15 @@ Mappings:
   RegionMap:
     us-east-1:
       AMI: ami-084568db4383264d4
-    us-west-2:
-      AMI: ami-075686beab831bb7f 
+      AMI: ami-467ca739
+    us-west-1:
+      AMI: ami-bf5540df
+    eu-west-1:
+      AMI: ami-3bfab942
+    ap-southeast-1:
+      AMI: ami-e2adf99e
+    ap-southeast-2:
+      AMI: ami-43874721
 
 Resources:
   #----------------------------------------------VPC----------------------------------------------
@@ -264,23 +267,6 @@ Resources:
     Properties:
       GroupDescription: Enable HTTP access on the inbound port ${FrontendPort}
       VpcId: !Ref VPC
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 22
-          ToPort: 22
-          CidrIp: 0.0.0.0/0
-        - IpProtocol: tcp
-          FromPort: !Ref FrontendPort
-          ToPort: !Ref FrontendPort
-          CidrIp: 0.0.0.0/0
-      SecurityGroupEgress:
-        - IpProtocol: -1
-          FromPort: 0
-          ToPort: 0
-          CidrIp: 0.0.0.0/0
-      Tags:
-        - Key: Name
-          Value: !Sub ${EnvironmentName}-FrontendSG
 
   BackendSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -395,43 +381,34 @@ Resources:
           Fn::Sub: |
             #!/bin/bash
 
-            set -e
-
-            ## 1) Actualizar sistema
             sudo apt-get update -y
             sudo apt-get upgrade -y
 
-            ## 2) Instalar npm, Node.js y Nginx
-            sudo apt-get install -y npm
+            sudo apt install -y npm
             curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-            sudo apt-get install -y nodejs
-            sudo apt-get install -y nginx git
+            sudo apt install -y nodejs
+            sudo apt install -y nginx
 
-            ## 3) Deshabilitar configuración por defecto de sites-enabled
             sudo sed -i 's@include /etc/nginx/sites-enabled/\*;@# include /etc/nginx/sites-enabled/*;@' /etc/nginx/nginx.conf
 
-            ## 4) Crear carpeta para servir React
             sudo mkdir -p /var/www/html/my-react-app
 
-            ## 5) Configurar Nginx para servir el build de React
             sudo tee /etc/nginx/conf.d/react.conf > /dev/null <<EOL
             server {
               listen 80;
               listen [::]:80;
               root /var/www/html/my-react-app/build;
-              index index.html index.htm;
-
+              
+              #react app
               location / {
-                try_files \$uri /index.html;
+                try_files $uri /index.html;  
               }
             }
             EOL
 
-            ## 6) Verificar y recargar Nginx
             sudo nginx -t
             sudo systemctl reload nginx
 
-            ## 7) Clonar el repositorio React y hacer checkout de la rama develop
             cd /home/ubuntu
             mkdir -p my-app
             cd my-app
@@ -439,32 +416,28 @@ Resources:
             cd frontend
             git checkout develop
 
-            ## 8) (Opcional) Si deseas reemplazar configuración de URL/PUERTO aquí:
-            # cat <<EOF > src/config/UrlPort.js
-            # export const backendUrl = 'http://<BACKEND_ALB>'; 
-            # export const backendPort = '80';
-            # EOF
+            cat <<EOF > /home/ubuntu/my-app/frontend/src/config/UrlPort.js
+            export const backendUrl = 'http://${BackendALB.DNSName}';
+            export const backendPort = '80';
+            EOF
 
-            ## 9) Instalar dependencias y generar build de producción
             npm install
             npm run build
 
-            ## 10) Copiar build a la carpeta de Nginx y ajustar permisos
             sudo rm -rf /var/www/html/my-react-app/*
             sudo cp -R build/ /var/www/html/my-react-app/
             sudo chown -R www-data:www-data /var/www/html/my-react-app
 
-            ## 11) Reiniciar Nginx para servir la app
             sudo nginx -t
             sudo systemctl restart nginx
             sudo systemctl enable nginx
 
-            
         TagSpecifications:
           - ResourceType: instance
             Tags:
               - Key: Name
                 Value: !Sub ${EnvironmentName}FI
+
 
   BackendLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
@@ -535,14 +508,14 @@ Resources:
       LaunchTemplate:
         LaunchTemplateId: !Ref FrontendLaunchTemplate
         Version: !GetAtt FrontendLaunchTemplate.LatestVersionNumber
-      MinSize: 1
-      MaxSize: 1
-      DesiredCapacity: 1
+      MinSize: 2
+      MaxSize: 4
+      DesiredCapacity: 2
       VPCZoneIdentifier:
         - !Ref PublicSubnet1
         - !Ref PublicSubnet2
       HealthCheckType: ELB
-      HealthCheckGracePeriod: 120
+      HealthCheckGracePeriod: 300
       TargetGroupARNs:
         - !Ref FrontendTargetGroup
 
@@ -643,11 +616,11 @@ Resources:
     Properties:
       VpcId: !Ref VPC
       TargetType: instance
-      HealthCheckPath: /
+      HealthCheckPath: /index.html
       HealthCheckIntervalSeconds: 30
       HealthCheckTimeoutSeconds: 5
       HealthyThresholdCount: 2
-      UnhealthyThresholdCount: 5
+      UnhealthyThresholdCount: 10
       Port: !Ref FrontendPort
       Protocol: HTTP
       Tags:
@@ -742,12 +715,6 @@ Resources:
 
 
 Outputs:
-  FrontendALBDNS:
-    Description: DNS público del Application Load Balancer para el frontend
-    Value: !GetAtt FrontendALB.DNSName
-    Export:
-      Name: !Sub ${EnvironmentName}-FrontendALB-DNS
-
   VPC:
     Description: Reference to created VPC
     Value: !Ref VPC

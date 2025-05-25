@@ -1,0 +1,294 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Plantilla mínima para desplegar únicamente el frontend React en una instancia EC2 con Nginx y Auto Scaling.
+
+Parameters:
+  EnvironmentName:
+    Description: Nombre del environment
+    Type: String
+    Default: PrEasyPark
+  VPCCIDR:
+    Description: CIDR para la VPC
+    Type: String
+    Default: 10.10.0.0/16
+  PublicSubnet1CIDR:
+    Description: CIDR para la primera subred pública
+    Type: String
+    Default: 10.10.1.0/24
+  PublicSubnet2CIDR:
+    Description: CIDR para la segunda subred pública
+    Type: String
+    Default: 10.10.2.0/24
+  InstanceType:
+    Description: Tipo de instancia EC2 para el frontend
+    Type: String
+    Default: t3.micro
+  KeyName:
+    Description: Nombre del par de llaves SSH para acceder a la instancia
+    Type: AWS::EC2::KeyPair::KeyName
+  FrontendPort:
+    Description: Puerto HTTP para el frontend (Nginx)
+    Type: Number
+    Default: 80
+
+Mappings:
+  RegionMap:
+    us-east-1:
+      AMI: ami-084568db4383264d4
+    us-west-2:
+      AMI: ami-075686beab831bb7f 
+
+Resources:
+
+  ### VPC y Subredes públicas ###
+  VPC:
+    Type: AWS::EC2::VPC
+    DeletionPolicy: Delete
+    Properties:
+      CidrBlock: !Ref VPCCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-VPC
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    DeletionPolicy: Delete
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-IGW
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    DeletionPolicy: Delete
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    DeletionPolicy: Delete
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnet1CIDR
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PublicSubnet1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    DeletionPolicy: Delete
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnet2CIDR
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PublicSubnet2
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    DeletionPolicy: Delete
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PublicRouteTable
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DeletionPolicy: Delete
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DeletionPolicy: Delete
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DeletionPolicy: Delete
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  ### Security Group para el Frontend ###
+  FrontendSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DeletionPolicy: Delete
+    Properties:
+      GroupDescription: Acceso SSH y HTTP al frontend
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: !Ref FrontendPort
+          ToPort: !Ref FrontendPort
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: 0
+          ToPort: 0
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-FrontendSG
+
+  ### Launch Template para la instancia del Frontend ###
+  FrontendLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    DeletionPolicy: Delete
+    Properties:
+      LaunchTemplateName: !Sub ${EnvironmentName}FLT
+      LaunchTemplateData:
+        ImageId: !FindInMap [ RegionMap, !Ref AWS::Region, AMI ]
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref KeyName
+        SecurityGroupIds:
+          - !GetAtt FrontendSecurityGroup.GroupId
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -e
+
+            ## 1) Actualizar sistema
+            sudo apt-get update -y
+            sudo apt-get upgrade -y
+
+            ## 2) Instalar npm, Node.js y Nginx
+            sudo apt-get install -y npm
+            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+            sudo apt-get install -y nodejs
+            sudo apt-get install -y nginx git
+
+            ## 3) Deshabilitar configuración por defecto de sites-enabled
+            sudo sed -i 's@include /etc/nginx/sites-enabled/\*;@# include /etc/nginx/sites-enabled/*;@' /etc/nginx/nginx.conf
+
+            ## 4) Crear carpeta para servir React
+            sudo mkdir -p /var/www/html/my-react-app
+
+            ## 5) Configurar Nginx para servir el build de React
+            sudo tee /etc/nginx/conf.d/react.conf > /dev/null <<EOL
+            server {
+              listen 80;
+              listen [::]:80;
+              root /var/www/html/my-react-app/build;
+              index index.html index.htm;
+
+              location / {
+                try_files \$uri /index.html;
+              }
+            }
+            EOL
+
+            ## 6) Verificar y recargar Nginx
+            sudo nginx -t
+            sudo systemctl reload nginx
+
+            ## 7) Clonar el repositorio React y hacer checkout de la rama develop
+            cd /home/ubuntu
+            mkdir -p my-app
+            cd my-app
+            git clone https://github.com/Easy-Park-Icesi/frontend.git
+            cd frontend
+            git checkout develop
+
+            ## 8) (Opcional) Si deseas reemplazar configuración de URL/PUERTO aquí:
+            # cat <<EOF > src/config/UrlPort.js
+            # export const backendUrl = 'http://<BACKEND_ALB>'; 
+            # export const backendPort = '80';
+            # EOF
+
+            ## 9) Instalar dependencias y generar build de producción
+            npm install
+            npm run build
+
+            ## 10) Copiar build a la carpeta de Nginx y ajustar permisos
+            sudo rm -rf /var/www/html/my-react-app/*
+            sudo cp -R build/ /var/www/html/my-react-app/
+            sudo chown -R www-data:www-data /var/www/html/my-react-app
+
+            ## 11) Reiniciar Nginx para servir la app
+            sudo nginx -t
+            sudo systemctl restart nginx
+            sudo systemctl enable nginx
+
+  ### Target Group y Load Balancer para el Frontend ###
+  FrontendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VPC
+      TargetType: instance
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      Port: !Ref FrontendPort
+      Protocol: HTTP
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-FrontendTG
+
+  FrontendALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${EnvironmentName}FLB
+      Scheme: internet-facing
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !GetAtt FrontendSecurityGroup.GroupId
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-FrontendLB
+
+  FrontendALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref FrontendALB
+      Protocol: HTTP
+      Port: !Ref FrontendPort
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref FrontendTargetGroup
+
+  ### Auto Scaling Group para el Frontend ###
+  FrontendAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DeletionPolicy: Delete
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref FrontendLaunchTemplate
+        Version: !GetAtt FrontendLaunchTemplate.LatestVersionNumber
+      MinSize: 1
+      MaxSize: 1
+      DesiredCapacity: 1
+      VPCZoneIdentifier:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 120
+      TargetGroupARNs:
+        - !Ref FrontendTargetGroup
+
+Outputs:
+  FrontendALBDNS:
+    Description: DNS público del Application Load Balancer para el frontend
+    Value: !GetAtt FrontendALB.DNSName
+    Export:
+      Name: !Sub ${EnvironmentName}-FrontendALB-DNS
