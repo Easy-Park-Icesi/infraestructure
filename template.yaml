@@ -437,13 +437,13 @@ Resources:
             cd my-app
             git clone https://github.com/Easy-Park-Icesi/frontend.git
             cd frontend
-            git checkout develop
+            git checkout correcion-errores-front-end-index
 
             ## 8) (Opcional) Si deseas reemplazar configuración de URL/PUERTO aquí:
-            # cat <<EOF > src/config/UrlPort.js
-            # export const backendUrl = 'http://${BackendALB.DNSName}'; 
-            # export const backendPort = '80';
-            # EOF
+            cat <<EOF > frontend/config.env
+            export const REACT_APP_BACKEND_URL = 'http://${BackendALB.DNSName}'; 
+            export const REACT_APP_BACKEND_PORT = '8080';
+            EOF
 
             ## 9) Instalar dependencias y generar build de producción
             npm install
@@ -466,75 +466,75 @@ Resources:
               - Key: Name
                 Value: !Sub ${EnvironmentName}FI
 
-BackendLaunchTemplate:
-  Type: AWS::EC2::LaunchTemplate
-  DeletionPolicy: Delete
-  Properties:
-    LaunchTemplateName: !Sub ${EnvironmentName}BLT
-    LaunchTemplateData:
-      ImageId:
-        Fn::FindInMap:
-          - RegionMap
-          - !Ref AWS::Region
-          - BackendAMI
-      InstanceType: !Ref InstanceType
-      KeyName: !Ref KeyName
-      SecurityGroupIds:
-        - !GetAtt BackendSecurityGroup.GroupId
-      UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          set -e
+  BackendLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    DeletionPolicy: Delete
+    Properties:
+      LaunchTemplateName: !Sub ${EnvironmentName}BLT
+      LaunchTemplateData:
+        ImageId:
+          Fn::FindInMap:
+            - RegionMap
+            - !Ref AWS::Region
+            - AMI
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref KeyName
+        SecurityGroupIds:
+          - !GetAtt BackendSecurityGroup.GroupId
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -e
 
-          ## 1) Actualizar paquetes
-          sudo apt-get update -y
-          sudo apt-get upgrade -y
+            ## 1) Actualizar paquetes
+            sudo apt-get update -y
+            sudo apt-get upgrade -y
 
-          ## 2) Instalar OpenJDK 21 y Git
-          sudo apt-get install -y openjdk-21-jdk git
+            ## 2) Instalar OpenJDK 21 y Git
+            sudo apt-get install -y openjdk-21-jdk git
 
-          ## 3) Clonar el repositorio del backend
-          cd /home/ubuntu
-          git clone https://github.com/Easy-Park-Icesi/backend.git
+            ## 3) Clonar el repositorio del backend
+            cd /home/ubuntu
+            git clone https://github.com/Easy-Park-Icesi/backend.git
 
-          ## 4) Copiar firebase-config.json exactamente como hacías manualmente
-          cd /home/ubuntu/backend/src/main/resources/
-          cp firebase-config.json /home/ubuntu/backend/
-          cp firebase-config.json /home/ubuntu/
+            ## 4) Copiar firebase-config.json exactamente como hacías manualmente
+            cd /home/ubuntu/backend/src/main/resources/
+            cp firebase-config.json /home/ubuntu/backend/
+            cp firebase-config.json /home/ubuntu/
 
-          ## 5) Regresar a la raíz del proyecto para compilar
-          cd /home/ubuntu/backend
+            ## 5) Regresar a la raíz del proyecto para compilar
+            cd /home/ubuntu/backend
 
-          ## 6) Reescribir application.properties para apuntar al frontend
-          cat <<EOF > src/main/resources/application.properties
-          frontend.url=http://${FrontendALB.DNSName}:80
-          EOF
+            ## 6) Reescribir application.properties para apuntar al frontend
+            cat <<EOF > src/main/resources/application.properties
+            frontend.url=http://${FrontendALB.DNSName}:80
+            EOF
 
-          ## 7) Dar permisos al wrapper de Maven y empaquetar
-          chmod +x mvnw
-          ./mvnw clean package -DskipTests
+            ## 7) Dar permisos al wrapper de Maven y empaquetar
+            chmod +x mvnw
+            ./mvnw clean package -DskipTests
 
-          ## 8) Crear servicio systemd para ejecutar el JAR
-          sudo tee /etc/systemd/system/easypark-backend.service > /dev/null <<EOL
-          [Unit]
-          Description=EasyPark Backend Service
-          After=network.target
+            ## 8) Crear servicio systemd para ejecutar el JAR
+            sudo tee /etc/systemd/system/easypark-backend.service > /dev/null <<EOL
+            [Unit]
+            Description=EasyPark Backend Service
+            After=network.target
 
-          [Service]
-          User=ubuntu
-          WorkingDirectory=/home/ubuntu/backend
-          ExecStart=/usr/bin/java -jar /home/ubuntu/backend/target/easypark-icesi-api-1.0.0.jar
-          Restart=always
-          RestartSec=10
+            [Service]
+            User=ubuntu
+            WorkingDirectory=/home/ubuntu/backend
+            ExecStart=/usr/bin/java -jar /home/ubuntu/backend/target/easypark-icesi-api-1.0.0.jar
+            Restart=always
+            RestartSec=10
 
-          [Install]
-          WantedBy=multi-user.target
-          EOL
+            [Install]
+            WantedBy=multi-user.target
+            EOL
 
-          ## 9) Iniciar y habilitar el servicio
-          sudo systemctl daemon-reload
-          sudo systemctl enable easypark-backend.service
-          sudo systemctl start easypark-backend.service
+            ## 9) Iniciar y habilitar el servicio
+            sudo systemctl daemon-reload
+            sudo systemctl enable easypark-backend.service
+            sudo systemctl start easypark-backend.service
         TagSpecifications:
           - ResourceType: instance
             Tags:
