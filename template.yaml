@@ -441,7 +441,7 @@ Resources:
 
             ## 8) (Opcional) Si deseas reemplazar configuración de URL/PUERTO aquí:
             # cat <<EOF > src/config/UrlPort.js
-            # export const backendUrl = 'http://<BACKEND_ALB>'; 
+            # export const backendUrl = 'http://${BackendALB.DNSName}'; 
             # export const backendPort = '80';
             # EOF
 
