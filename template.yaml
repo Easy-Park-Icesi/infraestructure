@@ -466,60 +466,75 @@ Resources:
               - Key: Name
                 Value: !Sub ${EnvironmentName}FI
 
-  BackendLaunchTemplate:
-    Type: AWS::EC2::LaunchTemplate
-    DeletionPolicy: Delete
-    Properties:
-      LaunchTemplateName: !Sub ${EnvironmentName}BLT
-      LaunchTemplateData:
-        ImageId: !FindInMap
+BackendLaunchTemplate:
+  Type: AWS::EC2::LaunchTemplate
+  DeletionPolicy: Delete
+  Properties:
+    LaunchTemplateName: !Sub ${EnvironmentName}BLT
+    LaunchTemplateData:
+      ImageId:
+        Fn::FindInMap:
           - RegionMap
           - !Ref AWS::Region
-          - AMI
-        InstanceType: !Ref InstanceType
-        KeyName: !Ref KeyName
-        SecurityGroupIds:
-          - !GetAtt BackendSecurityGroup.GroupId
-        UserData: !Base64
-          Fn::Sub: |
-            #!/bin/bash
-            yum update -y
-            amazon-linux-extras enable corretto11
-            yum install -y java-11-amazon-corretto-devel maven git
+          - BackendAMI
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SecurityGroupIds:
+        - !GetAtt BackendSecurityGroup.GroupId
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
 
-            # Clonar repo
-            sudo -u ec2-user git clone https://github.com/Easy-Park-Icesi/backend.git /home/ec2-user/backend
-            cd /home/ec2-user/backend
+          ## 1) Actualizar paquetes
+          sudo apt-get update -y
+          sudo apt-get upgrade -y
 
-            # Configurar application.properties con la URL del frontend (ALB)
-            cat <<EOF > src/main/resources/application.properties
-            frontend.url=http://${FrontendALB.DNSName}
-            # Otras configuraciones (Firebase, DB, etc.)
-            EOF
+          ## 2) Instalar OpenJDK 21 y Git
+          sudo apt-get install -y openjdk-21-jdk git
 
-            # Build y ejecutar
-            sudo -u ec2-user mvn clean package -DskipTests
-    
-            # Configurar como servicio systemd
-            cat <<EOF > /etc/systemd/system/easypark.service
-            [Unit]
-            Description=EasyPark Backend Service
-            After=network.target
+          ## 3) Clonar el repositorio del backend
+          cd /home/ubuntu
+          git clone https://github.com/Easy-Park-Icesi/backend.git
 
-            [Service]
-            User=ec2-user
-            WorkingDirectory=/home/ec2-user/backend
-            ExecStart=/usr/bin/java -jar target/*.jar
-            Restart=always
-            RestartSec=10
+          ## 4) Copiar firebase-config.json exactamente como hacías manualmente
+          cd /home/ubuntu/backend/src/main/resources/
+          cp firebase-config.json /home/ubuntu/backend/
+          cp firebase-config.json /home/ubuntu/
 
-            [Install]
-            WantedBy=multi-user.target
-            EOF
+          ## 5) Regresar a la raíz del proyecto para compilar
+          cd /home/ubuntu/backend
 
-            systemctl daemon-reload
-            systemctl enable easypark.service
-            systemctl start easypark.service
+          ## 6) Reescribir application.properties para apuntar al frontend
+          cat <<EOF > src/main/resources/application.properties
+          frontend.url=http://${FrontendALB.DNSName}:80
+          EOF
+
+          ## 7) Dar permisos al wrapper de Maven y empaquetar
+          chmod +x mvnw
+          ./mvnw clean package -DskipTests
+
+          ## 8) Crear servicio systemd para ejecutar el JAR
+          sudo tee /etc/systemd/system/easypark-backend.service > /dev/null <<EOL
+          [Unit]
+          Description=EasyPark Backend Service
+          After=network.target
+
+          [Service]
+          User=ubuntu
+          WorkingDirectory=/home/ubuntu/backend
+          ExecStart=/usr/bin/java -jar /home/ubuntu/backend/target/easypark-icesi-api-1.0.0.jar
+          Restart=always
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+          EOL
+
+          ## 9) Iniciar y habilitar el servicio
+          sudo systemctl daemon-reload
+          sudo systemctl enable easypark-backend.service
+          sudo systemctl start easypark-backend.service
         TagSpecifications:
           - ResourceType: instance
             Tags:
@@ -553,9 +568,9 @@ Resources:
       LaunchTemplate:
         LaunchTemplateId: !Ref BackendLaunchTemplate
         Version: !GetAtt BackendLaunchTemplate.LatestVersionNumber
-      MinSize: 2
-      MaxSize: 4
-      DesiredCapacity: 2
+      MinSize: 1
+      MaxSize: 1
+      DesiredCapacity: 1
       VPCZoneIdentifier:
         - !Ref PrivateSubnet1
         - !Ref PrivateSubnet2
